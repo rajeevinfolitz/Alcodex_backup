@@ -8,6 +8,7 @@
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
+// Define the Status structure
 struct Status {
   float version;
   uint32_t idNum;
@@ -22,6 +23,7 @@ struct Status {
   uint8_t batPc;
 };
 
+// Define the Config structure
 struct Config {
   uint32_t idNum;
   uint32_t gmt;
@@ -38,10 +40,11 @@ struct Config {
 
 Status status;
 Config config;
-int recordCount = 5; // ----------------------hardcorded for now
+int recordCount = 10; // Number of records to save in setup
 BLECharacteristic *pCharacteristic;
 BLEDescriptor *myBLECCCD = new BLE2902();
 bool shallNotify_Indicate = false;
+bool isSetupDone = false; // Flag to ensure setup logic runs only once
 
 void saveStatus(const Status& status, int recordNumber) {
   bool ok = NVS.setBlob(String(recordNumber), (uint8_t*)&status, sizeof(status));
@@ -89,15 +92,26 @@ void readConfig(Config& config) {
   }
 }
 
-// void readConfig(Config& config) {
-//   size_t blobSize = NVS.getBlobSize("config");
- 
-// }
+void updateConfig(Config& config, uint32_t idNum, uint32_t gmt, int8_t timeZone, uint16_t levelMaxDeltaPa, uint16_t levelMinDeltaPa, bool autoLevelEn, bool manualLevelEn, uint16_t manualLevelOnTime, uint16_t LevelMaxOnTime, float baroCalib, bool wifiEn) {
+  config.idNum = idNum;
+  config.gmt = gmt;
+  config.timeZone = timeZone;
+  config.levelMaxDeltaPa = levelMaxDeltaPa;
+  config.levelMinDeltaPa = levelMinDeltaPa;
+  config.autoLevelEn = autoLevelEn;
+  config.manualLevelEn = manualLevelEn;
+  config.manualLevelOnTime = manualLevelOnTime;
+  config.LevelMaxOnTime = LevelMaxOnTime;
+  config.baroCalib = baroCalib;
+  config.wifiEn = wifiEn;
+  saveConfig(config);
+}
 
 class CharCallbacks : public BLECharacteristicCallbacks {
   public:
     void onWrite(BLECharacteristic *pChar) {
-//      shallNotify_Indicate = true;
+      Serial.println("BLE Config Value:");
+      // shallNotify_Indicate = true;
     }
 };
 
@@ -106,16 +120,9 @@ class CCCDCallbacks : public BLEDescriptorCallbacks {
     void onWrite(BLEDescriptor *pDesc) {
       Serial.printf("[%ld]: Notification registered\n", millis());
     }
-
-// class CCCDCallbacks : public BLEDescriptorCallbacks {
-//   public:
-//     void onWrite(BLEDescriptor *pDesc) {
-//       Serial.printf("[%ld]: Notification registered\n", millis());
-//     }
 };
 
-void setup() {
-  Serial.begin(115200);
+void setupBLE() {
   Serial.println("Starting BLE work!");
 
   // BLE setup
@@ -129,13 +136,6 @@ void setup() {
                       BLECharacteristic::PROPERTY_INDICATE
                     );
 
-  // pCharacteristic = pService->createCharacteristic(
-  //                     CHARACTERISTIC_UUID,
-  //                     BLECharacteristic::PROPERTY_READ |
-  //                     BLECharacteristic::PROPERTY_WRITE |
-  //                     BLECharacteristic::PROPERTY_NOTIFY
-  //                   );
-
   pCharacteristic->setCallbacks(new CharCallbacks());
   myBLECCCD->setCallbacks(new CCCDCallbacks());
   pCharacteristic->addDescriptor(myBLECCCD);
@@ -148,31 +148,43 @@ void setup() {
   pAdvertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
   Serial.println("Characteristic defined! Now you can read it in your phone!");
+}
 
+void setup() {
+  Serial.begin(115200);
   NVS.begin();
-  NVS.setInt("recordCount", recordCount);
-
-  for (int i = 0; i < recordCount; i++) {
-    status = {1.0 + i, 12345 + i, 1609459200 + i, 1015 + i, 25.0 + i, 60 + i, 5 + i, 500 + i, 150.0 + i, 20.0 + i, 80 + i};
-    saveStatus(status, i);
-  }
-
-  // Save config
-  config = {12345, 1609459200, 0, 50, 10, true, false, 30, 60, 1.0, true};
-  saveConfig(config);
 }
 
 void loop() {
+  if (!isSetupDone) {
+    setupBLE();
+
+    // NVS setup
+    NVS.setInt("recordCount", recordCount);
+
+    for (int i = 0; i < recordCount; i++) {
+      status = {1.0 + i, 12345 + i, 1609459200 + i, 1015 + i, 25.0 + i, 60 + i, 5 + i, 500 + i, 150.0 + i, 20.0 + i, 80 + i};
+      saveStatus(status, i);
+    }
+
+    config = {12345, 1609459200, 0, 50, 10, true, false, 30, 60, 1.0, true};
+    saveConfig(config);
+
+    isSetupDone = true; // Set the flag to indicate setup is done
+  }
+
   if (((BLE2902*)myBLECCCD)->getIndications()) {
     shallNotify_Indicate = false;
     int recordCount = NVS.getInt("recordCount", 0);
     if (recordCount > 0) {
+      // Read and indicate status records one by one
       for (int i = 0; i < recordCount; i++) {
         readStatus(status, i);
         pCharacteristic->setValue((uint8_t*)&status, sizeof(status));
         pCharacteristic->indicate();
         delay(1000); // Delay for readability
       }
+      // Decrement record count
       NVS.setInt("recordCount", 0);
     }
   }
