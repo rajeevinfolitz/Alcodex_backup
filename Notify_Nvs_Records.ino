@@ -5,16 +5,16 @@
 #include <BLE2902.h>
 #include <ArduinoNvs.h>
 #include <HardwareSerial.h>
- 
+
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
- 
+
 enum msg {
   DONE,
   INCOMPLETE,
   ERROR
 };
- 
+
 // Define the Status structure
 struct Status {
   float version;
@@ -29,7 +29,7 @@ struct Status {
   float waterDeg;
   uint8_t batPc;
 };
- 
+
 // Define the Config structure
 #pragma pack(push, 1)
 struct Config {
@@ -46,7 +46,7 @@ struct Config {
   bool wifiEn;
 };
 #pragma pack(pop)
- 
+
 Status status;
 Config config;
 int recordCount = 10; // Number of records to save in setup
@@ -55,7 +55,7 @@ BLEDescriptor *myBLECCCD = new BLE2902();
 bool shallNotify_Indicate = false;
 bool isSetupDone = false; // Flag to ensure setup logic runs only once
 bool configReceived = false; // Flag to check if config has been received
- 
+
 void saveStatus(const Status& status, int recordNumber) {
   bool ok = NVS.setBlob(String(recordNumber), (uint8_t*)&status, sizeof(status));
   if (ok) {
@@ -64,7 +64,7 @@ void saveStatus(const Status& status, int recordNumber) {
     Serial.println("Failed to save status.");
   }
 }
- 
+
 void readStatus(Status& status, int recordNumber) {
   size_t blobSize = NVS.getBlobSize(String(recordNumber));
   if (blobSize == sizeof(status)) {
@@ -78,7 +78,7 @@ void readStatus(Status& status, int recordNumber) {
     Serial.println("No status found.");
   }
 }
- 
+
 void saveConfig(const Config& config) {
   bool ok = NVS.setBlob("config", (uint8_t*)&config, sizeof(config));
   if (ok) {
@@ -87,7 +87,7 @@ void saveConfig(const Config& config) {
     Serial.println("Failed to save config.");
   }
 }
- 
+
 void readConfig(Config& config) {
   size_t blobSize = NVS.getBlobSize("config");
   if (blobSize == sizeof(config)) {
@@ -101,7 +101,7 @@ void readConfig(Config& config) {
     Serial.println("No config found.");
   }
 }
- 
+
 void printConfig(const Config& config) {
   Serial.println("Updated Config:");
   Serial.print("idNum: "); Serial.println(config.idNum);
@@ -116,45 +116,48 @@ void printConfig(const Config& config) {
   Serial.print("baroCalib: "); Serial.println(config.baroCalib);
   Serial.print("wifiEn: "); Serial.println(config.wifiEn);
 }
- 
+
 class CharCallbacks : public BLECharacteristicCallbacks {
   public:
     void onWrite(BLECharacteristic *pChar) {
-      std::string value = pChar->getValue();                             //edit ->  std::string value = pChar->getValue();
-      Serial.println("Received Data in BLE Write chara:");
- 
+      std::string value = pChar->getValue();
+      Serial.println("Received Data in BLE Write characteristic:");
+
       if (value.size() == sizeof(Config)) {
         memcpy(&config, value.data(), sizeof(Config));
         printConfig(config);
         saveConfig(config);
         configReceived = true; // Set flag to indicate config was received
-      } else {
-        Serial.println("Received data size does not match Config structure size.");
+        Serial2.println("CONFIGURED"); // Send "CONFIGURED" via Serial2
+      } 
+      
+      else {
+        Serial.printf("Received data size (%d bytes) does not match Config structure size (%d bytes).\n", value.size(), sizeof(Config));
       }
     }
 };
- 
+
 class CCCDCallbacks : public BLEDescriptorCallbacks {
   public:
     void onWrite(BLEDescriptor *pDesc) {
       Serial.printf("[%ld]: Notification registered\n", millis());
     }
 };
- 
+
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
     Serial.println("Client connected.");
   }
- 
+
   void onDisconnect(BLEServer* pServer) {
     Serial.println("Client disconnected.");
     BLEDevice::startAdvertising(); // Restart advertising after disconnection
   }
 };
- 
+
 void setupBLE() {
   Serial.println("Starting BLE work!");
- 
+
   // BLE setup
   BLEDevice::init("Indicate issue Server");
   BLEServer *pServer = BLEDevice::createServer();
@@ -166,11 +169,11 @@ void setupBLE() {
                       BLECharacteristic::PROPERTY_WRITE |
                       BLECharacteristic::PROPERTY_INDICATE
                     );
- 
+
   pCharacteristic->setCallbacks(new CharCallbacks());
   myBLECCCD->setCallbacks(new CCCDCallbacks());
   pCharacteristic->addDescriptor(myBLECCCD);
- 
+
   pService->start();
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
@@ -180,72 +183,75 @@ void setupBLE() {
   BLEDevice::startAdvertising();
   Serial.println("Characteristic defined! Now you can read it in your phone!");
 }
- 
+
 void shutdown() {
+  // Empty function to be called if Config is not received
   Serial.println("Shutdown called.");
+  Serial2.println("COMPLETED"); // Send "COMPLETED" via Serial2
+  delay(100);
+  esp_deep_sleep_start();
 }
- 
-void ControllerSend(char* msg){
-  Serial2.printf("%s");
-}
- 
+
 void setup() {
   Serial.begin(115200);
   Serial2.begin(9600);
   NVS.begin();
 }
- 
+
 void loop() {
   if (!isSetupDone) {
     setupBLE();
- 
+
     // NVS setup
     NVS.setInt("recordCount", recordCount);
- 
+
     for (int i = 0; i < recordCount; i++) {
       status = {1.0 + i, 12345 + i, 1609459200 + i, 1015 + i, 25.0 + i, 60 + i, 5 + i, 500 + i, 150.0 + i, 20.0 + i, 80 + i};
       saveStatus(status, i);
     }
- 
+
     config = {12345, 1609459200, 0, 50, 10, true, false, 30, 60, 1.0, true};
     saveConfig(config);
- 
-    isSetupDone = true; // setup is done
+
+    isSetupDone = true; // Set the flag to indicate setup is done
   }
- 
+
   // Actual Loop starts
- 
+
   if (((BLE2902*)myBLECCCD)->getIndications()) {
     shallNotify_Indicate = false;
     int currentRecord = NVS.getInt("recordCount", 0);
     if (currentRecord > 0) {
- 
+
+      // Read and indicate status records one by one
       readConfig(config);
       Serial.printf("Config structure in hex:");
       for (size_t i = 0; i < sizeof(config); i++) {
         Serial.printf("%02X ", ((unsigned char*)&config)[i]);
       }
- 
+
       for (int i = 0; i < currentRecord; i++) {
         readStatus(status, i);
         pCharacteristic->setValue((uint8_t*)&status, sizeof(status));
         pCharacteristic->indicate();
-        delay(500);
- 
-        NVS.setInt("recordCount", i);
+        delay(1000); // Delay for readability
+
+        // Update and save the current record count
+        NVS.setInt("recordCount", currentRecord);
         Serial.println("");
       }
+      // Reset record count
       NVS.setInt("recordCount", 0);
- 
+
+      // Wait for Config structure to be sent via BLE write
       unsigned long startTime = millis();
       while (!configReceived && (millis() - startTime) < 10000) {
-        // Serial.println("Timer Expired | Config was not Received | sleeping...");
+        // Wait for 10 seconds or until config is received
         delay(100);
       }
- 
+
       if (!configReceived) {
-        // ControllerSend("COMPLETED");
-        shutdown();                                                
+        shutdown(); // Call shutdown if config was not received
       }
     }
   }
